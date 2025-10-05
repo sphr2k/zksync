@@ -1,0 +1,4 @@
+kazoo==2.10.0
+loguru==0.7.3
+pydantic==2.11.10
+pydantic-settings==2.11.0
