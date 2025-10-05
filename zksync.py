@@ -1,30 +1,33 @@
 import sys
 import time
-from typing import Optional, Set, Tuple
+from typing import Optional, Set
 
 from kazoo.client import KazooClient
 from kazoo.exceptions import NoNodeError
-from kazoo.protocol.states import ZnodeStat
 from loguru import logger
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# 1. Configure Adaptive Logging
 logger.remove()
 if sys.stdout.isatty():
-    logger.add(sys.stdout, colorize=True, format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | {message}")
+    logger.add(
+        sys.stdout,
+        colorize=True,
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | {message}",
+    )
 else:
     logger.add(sys.stdout, serialize=True)
 
-# 2. Type-Safe Configuration
+
 class SyncConfig(BaseSettings):
-    SOURCE_HOSTS: Optional[str] = None
-    DEST_HOSTS: Optional[str] = None
-    SYNC_INTERVAL_SECONDS: int = 300
-    ROOT_PATH: str = "/"
-    EXCLUDED_PATHS: Set[str] = {"/zookeeper"}
+    source_hosts: Optional[str] = None
+    dest_hosts: Optional[str] = None
+    sync_interval_sec: int = 300
+    root_path: str = "/"
+    excluded_paths: Set[str] = {"/zookeeper"}
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-# 3. Helper Functions for Type Safety and Clarity
+
 def _safe_get_znode_data(client: KazooClient, path: str) -> bytes:
     """
     Safely gets znode data
@@ -44,7 +47,10 @@ def _safe_get_znode_data(client: KazooClient, path: str) -> bytes:
             raise
         return b""
 
-def get_all_children_recursive(client: KazooClient, path: str, excluded: Set[str]) -> Set[str]:
+
+def get_all_children_recursive(
+    client: KazooClient, path: str, excluded: Set[str]
+) -> Set[str]:
     """Recursively fetches all descendant znode paths."""
     if path in excluded:
         return set()
@@ -58,20 +64,24 @@ def get_all_children_recursive(client: KazooClient, path: str, excluded: Set[str
         pass
     return all_paths
 
-# 4. Main Application Logic
+
 def sync_clusters(source_zk: KazooClient, dest_zk: KazooClient, config: SyncConfig):
     """Performs a one-way sync using the safe helper function."""
     logger.info("Starting sync cycle")
 
-    source_paths = get_all_children_recursive(source_zk, config.ROOT_PATH, config.EXCLUDED_PATHS)
-    dest_paths = get_all_children_recursive(dest_zk, config.ROOT_PATH, config.EXCLUDED_PATHS)
+    source_paths = get_all_children_recursive(
+        source_zk, config.root_path, config.excluded_paths
+    )
+    dest_paths = get_all_children_recursive(
+        dest_zk, config.root_path, config.excluded_paths
+    )
     paths_to_create_or_update = source_paths
     paths_to_delete = dest_paths - source_paths
 
     num_created = 0
     num_updated = 0
     for path in sorted(list(paths_to_create_or_update)):
-        if path in config.EXCLUDED_PATHS:
+        if path in config.excluded_paths:
             continue
         try:
             # Linter is now happy because _safe_get_znode_data always returns bytes.
@@ -95,7 +105,7 @@ def sync_clusters(source_zk: KazooClient, dest_zk: KazooClient, config: SyncConf
 
     num_deleted = 0
     for path in sorted(list(paths_to_delete), reverse=True):
-        if path == config.ROOT_PATH or path in config.EXCLUDED_PATHS:
+        if path == config.root_path or path in config.excluded_paths:
             continue
         try:
             logger.info(f"Deleting znode: {path}")
@@ -106,20 +116,26 @@ def sync_clusters(source_zk: KazooClient, dest_zk: KazooClient, config: SyncConf
         except Exception as e:
             logger.error(f"Error deleting znode {path}: {e}")
 
-    logger.info("Sync cycle complete", created=num_created, updated=num_updated, deleted=num_deleted)
+    logger.info(
+        "Sync cycle complete",
+        created=num_created,
+        updated=num_updated,
+        deleted=num_deleted,
+    )
+
 
 if __name__ == "__main__":
     try:
         config = SyncConfig()
-        if not config.SOURCE_HOSTS or not config.DEST_HOSTS:
-            raise ValueError("SOURCE_HOSTS and DEST_HOSTS must be set.")
+        if not config.source_hosts or not config.dest_hosts:
+            raise ValueError("source_hosts and dest_hosts must be set.")
         logger.info("Configuration loaded successfully.")
-    except (ValueError, Exception) as e:
-        logger.critical(f"Fatal: Failed to load configuration. {e}")
+    except (ValueError, Exception) as ex:
+        logger.critical(f"Failed to load configuration. {ex}")
         sys.exit(1)
 
-    source_client = KazooClient(hosts=config.SOURCE_HOSTS)
-    dest_client = KazooClient(hosts=config.DEST_HOSTS)
+    source_client = KazooClient(hosts=config.source_hosts)
+    dest_client = KazooClient(hosts=config.dest_hosts)
 
     try:
         source_client.start()
@@ -127,14 +143,15 @@ if __name__ == "__main__":
         logger.info("Clients connected. Starting periodic sync...")
         while True:
             sync_clusters(source_client, dest_client, config)
-            logger.info(f"Waiting for {config.SYNC_INTERVAL_SECONDS} seconds before next cycle.")
-            time.sleep(config.SYNC_INTERVAL_SECONDS)
+            logger.info(
+                f"Waiting for {config.sync_interval_sec} seconds before next cycle."
+            )
+            time.sleep(config.sync_interval_sec)
     except KeyboardInterrupt:
         logger.info("Shutdown signal received. Exiting gracefully.")
     finally:
-        if source_client.state != 'CLOSED':
+        if source_client.state != "CLOSED":
             source_client.stop()
-        if dest_client.state != 'CLOSED':
+        if dest_client.state != "CLOSED":
             dest_client.stop()
         logger.info("Clients disconnected.")
-
